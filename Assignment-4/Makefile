@@ -10,4 +10,4 @@ MyHTTP.o: MyHTTP.c
 clean:
 	rm *.o MyOwnBrowser MyOwnHTTP
 
-GET http://127.0.0.1/index.html:20000
+# GET http://127.0.0.1/index.html:20000
