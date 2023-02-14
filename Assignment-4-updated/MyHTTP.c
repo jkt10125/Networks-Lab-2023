@@ -12,7 +12,7 @@
 #include <fcntl.h>
 
 #define MAXCLIENT 5
-#define BUFLEN 50
+#define BUFLEN 100
 
 enum FILE_TYPE
 {
@@ -25,8 +25,7 @@ enum FILE_TYPE
 char *generateResponse(char *command, char *filepath);
 int sendFile(int, const char *);
 
-// recv until null-character is recieved, returns NULL if fails
-char *recvRequest(int sockfd)
+char *recvRequest(int sockfd, int *requestlen)
 {
     int i, j, recvlen, capacity = 1;
     char buffer[BUFLEN];
@@ -45,10 +44,11 @@ char *recvRequest(int sockfd)
         }
         if (recvlen == 0)
         {
-            fprintf(stderr, "session terminated (Ctrl+C)\n");
+            fprintf(stderr, "session terminated by client\n");
             free(packet);
             return NULL;
         }
+
         if (capacity < i + recvlen)
         {
             capacity += recvlen;
@@ -65,10 +65,10 @@ char *recvRequest(int sockfd)
             break;
         }
     }
+    *requestlen = i;
     return packet;
 }
 
-// send size_n bytes, return -1 if fails
 int sendResponse(int sockfd, const char *request, int size_n)
 {
     int i, j;
@@ -83,26 +83,56 @@ int sendResponse(int sockfd, const char *request, int size_n)
         {
             buffer[j++] = request[i++];
         }
-        if (send(sockfd, buffer, j, 0) < 0)
+        int k;
+        if ((k = send(sockfd, buffer, j, 0)) < 0)
             return -1;
     }
     return 0;
 }
 
+int putFile(char *filepath, char *content, int size_n)
+{
+    int fd, curr, j, n;
+    char buf[BUFLEN];
+
+    if ((fd = open(filepath, O_WRONLY | O_CREAT | O_TRUNC)) == -1)
+    {
+        return -1;
+    }
+    curr = 0;
+    while (1)
+    {
+        j = 0;
+        while (j < BUFLEN && curr + j < size_n)
+        {
+            buf[j] = content[curr + j];
+            j++;
+        }
+        if ((n = write(fd, buf, j)) < 0)
+            return -1;
+        curr += n;
+        if (curr == size_n)
+            break;
+    }
+    close(fd);
+    return 0;
+}
 void communicate(int newsockfd)
 {
-
     char *request;
-    if ((request = recvRequest(newsockfd)) == NULL)
+    int requestlen;
+    if ((request = recvRequest(newsockfd, &requestlen)) == NULL)
     {
         perror("request");
         return;
     }
 
     char *content;
+    int contentlen;
     char *headrequest = (char *)malloc(4096 * sizeof(char));
+    memset(headrequest, 0, 4096);
 
-    for (int i = 0; i + 3 < strlen(request); i++)
+    for (int i = 0; i + 3 < requestlen; i++)
     {
         headrequest[i] = request[i];
         if (request[i] == '\r' && request[i + 1] == '\n' && request[i + 2] == '\r' && request[i + 3] == '\n')
@@ -110,8 +140,9 @@ void communicate(int newsockfd)
             headrequest[i + 1] = request[i + 1];
             headrequest[i + 2] = request[i + 2];
             headrequest[i + 3] = request[i + 3];
-            content = (char *)malloc(sizeof(char) * (strlen(request) - i - 3));
-            for (int j = 0; j + i + 4 <= strlen(request); j++)
+            contentlen = (requestlen - i - 4);
+            content = (char *)malloc(sizeof(char) * contentlen);
+            for (int j = 0; j + i + 4 < requestlen; j++)
                 content[j] = request[j + i + 4];
             break;
         }
@@ -127,44 +158,54 @@ void communicate(int newsockfd)
     strtok(headrequest, "\n");
     sscanf(headrequest, "%s %s %s", command, url, http_version);
 
-    // while ((header = strtok(NULL, "\r\n")) != NULL)
-    // {
-    //     char field[32], value[256];
-    //     sscanf(header, "%[^:]: %[^\n]", field, value);
-    //     if (strcmp(field, "Connection") == 0)
-    //     {
-    //         if (strcmp(value, "close") == 0)
-    //             connection = 0;
-    //         else
-    //             connection = 1;
-    //     }
-    //     else if (strcmp(field, "Content-Length") == 0)
-    //         len = atoi(value);
-    //     else if (strcmp(field, "Content-Type") == 0)
-    //     {
-    //         strtok(value, ";");
-    //         printf("%s\n", value);
-    //         if (strcmp(value, "text/html") == 0)
-    //             type = HTML;
-    //         else if (strcmp(value, "application/pdf") == 0)
-    //             type = PDF;
-    //         else if (strcmp(value, "image/jpeg") == 0)
-    //             type = JPG;
-    //         else if (strcmp(value, "text/*") == 0)
-    //             type = OTHER;
-    //         else
-    //             type = -1;
-    //     }
-    // }
+    FILE *fp = fopen("AccessLog.txt", "a");
+    if (fp == 0)
+    {
+        perror("fopen: AccessLog.txt");
+    }
+    fprintf(fp, "%s:%s\n", command, url);
+    fclose(fp);
+
+    while ((header = strtok(NULL, "\r\n")) != NULL)
+    {
+        char field[32], value[256];
+        sscanf(header, "%[^:]: %[^\n]", field, value);
+        if (strcmp(field, "Connection") == 0)
+        {
+            if (strcmp(value, "close") == 0)
+                connection = 0;
+            else
+                connection = 1;
+        }
+        else if (strcmp(field, "Content-Length") == 0)
+            len = atoi(value);
+        else if (strcmp(field, "Content-Type") == 0)
+        {
+            strtok(value, ";");
+            if (strcmp(value, "text/html") == 0)
+                type = HTML;
+            else if (strcmp(value, "application/pdf") == 0)
+                type = PDF;
+            else if (strcmp(value, "image/jpeg") == 0)
+                type = JPG;
+            else if (strcmp(value, "text/*") == 0)
+                type = OTHER;
+            else
+                type = -1;
+        }
+    }
 
     char *gen_response = generateResponse(command, &url[1]);
-
-    sendResponse(newsockfd, gen_response, strlen(gen_response));
 
     sscanf(gen_response, "HTTP/1.1 %d", &status);
 
     if (status == 200 && strcmp(command, "GET") == 0)
     {
+        if (sendResponse(newsockfd, gen_response, strlen(gen_response)) < 0)
+        {
+            perror("send response");
+        }
+
         if (sendFile(newsockfd, &url[1]) == -1)
         {
             perror("cant send");
@@ -174,12 +215,67 @@ void communicate(int newsockfd)
 
     else if (status == 200 && strcmp(command, "PUT") == 0)
     {
-        // todo
+        if (len != -1)
+        {
+            int curr_byte = contentlen;
+            char buffer[BUFLEN];
+            int recv_byte;
+            while (1)
+            {
+                if (curr_byte >= len + 1)
+                    break;
+                recv_byte = recv(newsockfd, buffer, BUFLEN, 0);
+                if (recv_byte == 0)
+                {
+                    perror("connection closed by client");
+                    return;
+                }
+                content = (char *)realloc(content, sizeof(char) * (curr_byte + recv_byte));
+                int j = 0;
+                while (j < recv_byte)
+                {
+                    content[curr_byte + j] = buffer[j];
+                    j++;
+                }
+                curr_byte += recv_byte;
+            }
+        }
+        else
+            len = contentlen - 1;
+
+        if (putFile(url + 1, content, len) < 0)
+        {
+            perror("put");
+        }
+
+        if (sendResponse(newsockfd, gen_response, strlen(gen_response)) < 0)
+        {
+            perror("send response");
+        }
+    }
+    else
+    {
+        if (sendResponse(newsockfd, gen_response, strlen(gen_response)) < 0)
+        {
+            perror("send response");
+        }
     }
 
     sendResponse(newsockfd, "", 1);
 
-    printf("%s", gen_response);
+    // printf("%s", gen_response);
+    int idx = 0;
+    while (1) {
+        printf("%c", gen_response[idx]);
+        if (
+            idx > 2 &&
+            gen_response[idx] == '\n' && 
+            gen_response[idx - 1] == '\r' && 
+            gen_response[idx - 2] == '\n' && 
+            gen_response[idx - 3] == '\r'
+        ) break;
+        idx++;
+    }
 }
 
 int getExtension(char *filename)
@@ -220,7 +316,8 @@ int sendFile(int sockfd, const char *filepath)
 
     while ((n = read(fd, buffer, BUFLEN)) > 0)
     {
-        if (send(sockfd, buffer, n, 0) < 0)
+        int k;
+        if ((k = send(sockfd, buffer, n, 0)) < 0)
             return -1;
     }
 
@@ -233,7 +330,7 @@ char *generateResponsefor200(char *command, char *filepath)
 {
     char *response = (char *)malloc(4096 * sizeof(char));
     memset(response, 0, 4096);
-    sprintf(response + strlen(response), "HTTP/1.1 200 OK\n");
+    sprintf(response + strlen(response), "HTTP/1.1 200 OK\r\n");
     if (strcmp(command, "GET") == 0)
     {
 
@@ -253,7 +350,7 @@ char *generateResponsefor200(char *command, char *filepath)
             return response;
         }
         fseek(fp, 0L, SEEK_END);
-        sprintf(response + strlen(response), "%s: %ld\r\n", "Content-length", ftell(fp));
+        sprintf(response + strlen(response), "%s: %ld\r\n", "Content-Length", ftell(fp));
         fclose(fp);
         sprintf(response + strlen(response), "%s: %s\r\n", "Content-Language", "en-us");
         sprintf(response + strlen(response), "%s: ", "Content-Type");
@@ -280,10 +377,9 @@ char *generateResponsefor200(char *command, char *filepath)
         strftime(response + strlen(response), 32, "%a, %d %b %Y %H:%M:%S GMT\r\n", getModifiedTime(filepath));
         sprintf(response + strlen(response), "\r\n");
 
-        // SEND THE MENTIONED FILE
     }
 
-    else if (strcmp(command, "PUT"))
+    else if (strcmp(command, "PUT") == 0)
     {
         sprintf(response + strlen(response), "%s: %s\r\n", "Connection", "close");
         sprintf(response + strlen(response), "%s: ", "Date");
@@ -315,7 +411,6 @@ char *generateResponsefor400()
     sprintf(response + strlen(response), "\r\n");
 
     sprintf(response + strlen(response), "%s", html_str);
-    // response[strlen(response)] = '\0';
 
     return response;
 }
@@ -340,7 +435,6 @@ char *generateResponsefor403()
     sprintf(response + strlen(response), "\r\n");
 
     sprintf(response + strlen(response), "%s", html_str);
-    // response[strlen(response)] = '\0';
 
     return response;
 }
@@ -365,17 +459,18 @@ char *generateResponsefor404()
     sprintf(response + strlen(response), "\r\n");
 
     sprintf(response + strlen(response), "%s", html_str);
-    // response[strlen(response)] = '\0';
 
     return response;
 }
 
 char *generateResponse(char *command, char *filepath)
 {
-    if (access(filepath, F_OK) == -1)
-        return generateResponsefor404();
+
     if (strcmp(command, "GET") == 0)
     {
+        if (access(filepath, F_OK) == -1)
+            return generateResponsefor404();
+
         if (access(filepath, R_OK) == -1)
         {
             return generateResponsefor403();
@@ -384,7 +479,7 @@ char *generateResponse(char *command, char *filepath)
     }
     else if (strcmp(command, "PUT") == 0)
     {
-        if (access(filepath, W_OK) == -1)
+        if (access(filepath, F_OK) != -1 && access(filepath, W_OK) == -1)
         {
             return generateResponsefor403();
         }
@@ -393,50 +488,13 @@ char *generateResponse(char *command, char *filepath)
     return generateResponsefor400();
 }
 
-// char *processRequest(char *request, int sockfd)
-// {
-//     char *header, *response;
-//     time_t If_modified_since;
-//     int Content_Length, connection = 1;
-
-//     char command[10], url[10], http_protocol[10];
-//     strtok(request, "\r\n");
-//     sscanf(request, "%s %s %[^\n]", command, url, http_protocol);
-
-//     response = generateResponse(command, &url[1]);
-//     response = realloc(response, 409600 * sizeof(char));
-//     // memset(&response[sizeof(response)], 0, 409600);
-
-//     while ((header = strtok(NULL, "\r\n")) != NULL)
-//     {
-//         char field[32], value[256];
-//         sscanf(header, "%[^:]: %[^\n]", field, value);
-//         if (strcmp(field, "Connection") == 0)
-//         {
-//             if (strcmp(field, "close") == 0)
-//                 connection = 0;
-//         }
-//         else if (strcmp(field, "Content-Length") == 0)
-//             Content_Length = atoi(value);
-//         else if (strcmp(field, "If-modified-since") == 0)
-//         {
-//             // If_modified_since = mktime(value);
-//         }
-//     }
-
-//     if (strcmp(command, "GET") == 0)
-//     {
-//         if (mktime(getModifiedTime(&url[1])) > If_modified_since)
-//         {
-//         }
-//     }
-
-//     return response;
-// }
-
-
 int main(int argc, char *argv[])
 {
+    if (argc != 2)
+    {
+        printf("Usage: <executable>  <port>\n");
+        return 1;
+    }
     int sockfd, newsockfd;
     socklen_t clilen;
     struct sockaddr_in cli_addr, serv_addr;
@@ -487,12 +545,23 @@ int main(int argc, char *argv[])
             close(newsockfd);
             continue;
         }
-        // child process
         if (pid == 0)
         {
             close(sockfd);
+            FILE *fp = fopen("AccessLog.txt", "a");
+            if (fp == 0)
+            {
+                perror("fopen: AccessLog.txt");
+            }
+            char log[20];
+            memset(log, 0, sizeof(log));
+            time_t rawtime = time(NULL);
+            strftime(log, sizeof(log), "%d%m%y:%H%M%S", gmtime(&rawtime));
+            fprintf(fp, "%s:%s:%u:", log, inet_ntoa(cli_addr.sin_addr), ntohs(cli_addr.sin_port));
+            fclose(fp);
             communicate(newsockfd);
             close(newsockfd);
+
             exit(EXIT_SUCCESS);
         }
 
