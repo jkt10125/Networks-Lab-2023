@@ -4,11 +4,27 @@
 #define SOCK_MyTCP_NONBLOCK (SOCK_MyTCP | SOCK_NONBLOCK)
 #define SOCK_MyTCP_CLOEXEC (SOCK_MyTCP | SOCK_CLOEXEC)
 #define SOCK_MyTCP_NONBLOCK_CLOEXEC (SOCK_MyTCP | SOCK_NONBLOCK | SOCK_CLOEXEC)
+#define TABLE_SIZE 10
 
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
+
+typedef struct _entry
+{
+    char *msg;
+    size_t msglen;
+    int flags;
+} Entry;
+
+typedef struct _table
+{
+    struct _entry buffer[TABLE_SIZE];
+    size_t start;
+    size_t end;
+    size_t size;
+} Table;
 
 /**
  * @brief   Create a new socket of type TYPE in domain DOMAIN, using
