@@ -4,29 +4,29 @@
 LIBPATH = /usr/local/lib
 INCPATH = /usr/local/include
 
-test: library server client
-
-all: library install
-
-library: mysocket.o
+libmsocket.a: mysocket.o
 	@ echo
 	@ echo Building library.......
-	ar rcs -o libmsocket.a mysocket.o
+	ar rcs -o libmsocket.a mysocket.o -lpthread
 
 mysocket.o: mysocket.c mysocket.h
 	gcc -Wall -c mysocket.c
 
-server: server.c libmsocket.a
-	gcc -Wall -L. server.c -o server -lmsocket
-
-client: client.c libmsocket.a
-	gcc -Wall -L. client.c -o client -lmsocket
+all: libmsocket.a install clean
 
 install:
 	@ echo
 	@ echo Installing library.......
 	cp -p mysocket.h $(INCPATH)
 	cp -p libmsocket.a $(LIBPATH)
+
+test: server client
+
+server: server.c libmsocket.a
+	gcc -Wall -I. -L. server.c -o server -lmsocket
+
+client: client.c libmsocket.a
+	gcc -Wall -I. -L. client.c -o client -lmsocket
 
 clean:
 	@ echo
