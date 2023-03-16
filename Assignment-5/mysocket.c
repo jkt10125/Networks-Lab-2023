@@ -7,7 +7,7 @@
 #include <poll.h>
 #include <fcntl.h>
 #include <pthread.h>
-#define BUFSIZE 50
+#define BUFSIZE 100
 
 int sockfd = -1;
 int newsockfd = -1;
@@ -38,35 +38,45 @@ void *SthreadRunner(void *param)
 
     while (1)
     {
+        // wait until a connection is established
         pthread_mutex_lock(&mutex);
         while (newsockfd == -1)
             pthread_cond_wait(&connected, &mutex);
         pthread_mutex_unlock(&mutex);
+
+        // possible cancellation point
         pthread_testcancel();
+
+        // wait till send table is empty
         pthread_mutex_lock(&sendMutex);
         while (send_table->size == 0)
         {
             pthread_cond_wait(&sendFull, &sendMutex);
         }
         pthread_mutex_unlock(&sendMutex);
+
+        // possible cancellation point
         pthread_testcancel();
+
         pthread_mutex_lock(&sendMutex);
         int flags = send_table->buffer[send_table->start].flags;
         int msglen = send_table->buffer[send_table->start].msglen;
         char *msg = (char *)malloc(msglen);
         memcpy(msg, send_table->buffer[send_table->start].msg, msglen);
-        // free(send_table->buffer[send_table->start].msg);
+        free(send_table->buffer[send_table->start].msg);
         send_table->start = (send_table->start + 1) % TABLE_SIZE;
         send_table->size--;
         pthread_cond_signal(&sendEmpty);
         pthread_mutex_unlock(&sendMutex);
+
         if (send(newsockfd, &msglen, sizeof(msglen), flags) < 0)
         {
+            perror("send()");
             continue;
         }
-        int sendlen;
+
         char buffer[BUFSIZE];
-        sendlen = 0;
+        int sendlen = 0;
         while (sendlen < msglen)
         {
             memset(buffer, 0, BUFSIZE);
@@ -77,11 +87,13 @@ void *SthreadRunner(void *param)
             }
             if (send(newsockfd, buffer, buflen, flags) < 0)
             {
-                continue;
+                perror("send()");
+                break;
             }
         }
-        // free(msg);
+        free(msg);
     }
+
     return param;
 }
 
@@ -90,19 +102,30 @@ void *RthreadRunner(void *param)
 
     while (1)
     {
+        // wait until a connection is established
         pthread_mutex_lock(&mutex);
         while (newsockfd == -1)
             pthread_cond_wait(&connected, &mutex);
         pthread_mutex_unlock(&mutex);
 
+        // possible cancellation point
         pthread_testcancel();
 
-        int peeklen;
+        int peeklen, flag = 0;
         int size;
         do
         {
             peeklen = recv(newsockfd, &size, sizeof(size), MSG_PEEK);
+            if (peeklen < 0)
+            {
+                flag = 1;
+                break;
+            }
         } while (peeklen < 4);
+
+        if (flag)
+            continue;
+
         recv(newsockfd, &size, sizeof(size), 0);
         char *buf = (char *)malloc(size);
         int recvlen = 0;
@@ -111,17 +134,25 @@ void *RthreadRunner(void *param)
             int n = recv(newsockfd, buf + recvlen, size - recvlen, 0);
             if (n <= 0)
             {
-                continue;
+                flag = 1;
+                break;
             }
             recvlen += n;
         }
+        if (flag)
+            continue;
+
+        // wait till recv table is full
         pthread_mutex_lock(&recvMutex);
         while (recv_table->size == TABLE_SIZE)
         {
             pthread_cond_wait(&recvEmpty, &recvMutex);
         }
         pthread_mutex_unlock(&recvMutex);
+
+        // possible cancellation point
         pthread_testcancel();
+
         pthread_mutex_lock(&recvMutex);
         recv_table->buffer[recv_table->end].msg = buf;
         recv_table->buffer[recv_table->end].msglen = size;
@@ -133,6 +164,7 @@ void *RthreadRunner(void *param)
     }
     return param;
 }
+
 int my_socket(int domain, int type, int protocol)
 {
     if (sockfd != -1)
@@ -140,12 +172,15 @@ int my_socket(int domain, int type, int protocol)
         errno = ENOBUFS;
         return -1;
     }
+
     if (type != SOCK_MyTCP && type != SOCK_MyTCP_NONBLOCK && type != SOCK_MyTCP_CLOEXEC && type != SOCK_MyTCP_NONBLOCK_CLOEXEC)
     {
         errno = EINVAL;
         return -1;
     }
+
     sockfd = socket(domain, SOCK_STREAM, protocol);
+
     if (sockfd > 0)
     {
         init_table(&send_table);
@@ -163,12 +198,13 @@ int my_socket(int domain, int type, int protocol)
         pthread_create(&threadS, &attr, SthreadRunner, NULL);
         pthread_create(&threadR, &attr, RthreadRunner, NULL);
     }
+
     return sockfd;
 }
 
 int my_bind(int fd, const struct sockaddr *addr, socklen_t len)
 {
-    if (fd != sockfd)
+    if (sockfd == -1 || fd != sockfd)
     {
         errno = ENOTSOCK;
         return -1;
@@ -178,7 +214,7 @@ int my_bind(int fd, const struct sockaddr *addr, socklen_t len)
 
 int my_listen(int fd, int n)
 {
-    if (fd != sockfd)
+    if (sockfd == -1 || fd != sockfd)
     {
         errno = ENOTSOCK;
         return -1;
@@ -188,40 +224,46 @@ int my_listen(int fd, int n)
 
 int my_accept(int fd, struct sockaddr *addr, socklen_t *addr_len)
 {
-
-    if (fd != sockfd)
+    if (sockfd == -1 || fd != sockfd)
     {
         errno = ENOTSOCK;
         return -1;
     }
+    int retfd = accept(fd, addr, addr_len);
+    if (retfd < 0)
+        return retfd;
     pthread_mutex_lock(&mutex);
-    newsockfd = accept(fd, addr, addr_len);
+    newsockfd = retfd;
     pthread_cond_broadcast(&connected);
     pthread_mutex_unlock(&mutex);
-    return newsockfd;
+    return retfd;
 }
 
 int my_connect(int fd, const struct sockaddr *restrict addr, socklen_t len)
 {
-    if (fd != sockfd)
+    if (sockfd == -1 || fd != sockfd)
     {
         errno = ENOTSOCK;
         return -1;
     }
+    int retVal = connect(fd, addr, len);
+    if (retVal < 0)
+        return retVal;
     pthread_mutex_lock(&mutex);
     newsockfd = fd;
     pthread_cond_broadcast(&connected);
     pthread_mutex_unlock(&mutex);
-    return connect(fd, addr, len);
+    return retVal;
 }
 
 ssize_t my_send(int fd, const void *buf, size_t n, int flags)
 {
-    if (fd != newsockfd)
+    if (newsockfd == -1 || fd != newsockfd)
     {
         errno = EBADF;
         return -1;
     }
+
     pthread_mutex_lock(&sendMutex);
     while (send_table->size == TABLE_SIZE)
     {
@@ -235,12 +277,13 @@ ssize_t my_send(int fd, const void *buf, size_t n, int flags)
     send_table->size++;
     pthread_cond_signal(&sendFull);
     pthread_mutex_unlock(&sendMutex);
+
     return n;
 }
 
 ssize_t my_recv(int fd, void *buf, size_t n, int flags)
 {
-    if (fd != newsockfd)
+    if (newsockfd == -1 || fd != newsockfd)
     {
         errno = EBADF;
         return -1;
@@ -253,38 +296,42 @@ ssize_t my_recv(int fd, void *buf, size_t n, int flags)
     }
     int len = (n > recv_table->buffer[recv_table->start].msglen) ? recv_table->buffer[recv_table->start].msglen : n;
     memcpy(buf, recv_table->buffer[recv_table->start].msg, len);
-    // free(recv_table->buffer[recv_table->start].msg);
+    free(recv_table->buffer[recv_table->start].msg);
     recv_table->start = (recv_table->start + 1) % TABLE_SIZE;
     recv_table->size--;
     pthread_cond_signal(&recvEmpty);
     pthread_mutex_unlock(&recvMutex);
+
     return len;
 }
 
 int my_close(int fd)
 {
-    if (fd == sockfd)
+    usleep(1000);
+    if (sockfd != -1 && fd == sockfd)
     {
         sockfd = -1;
         pthread_cancel(threadS);
         pthread_cancel(threadR);
         pthread_cond_signal(&sendFull);
         pthread_cond_signal(&recvEmpty);
+        pthread_cond_broadcast(&connected);
         pthread_join(threadS, NULL);
         pthread_join(threadR, NULL);
         destroy_table(send_table);
         destroy_table(recv_table);
     }
-    else if (fd == newsockfd)
+    else if (newsockfd != -1 && fd == newsockfd)
     {
-        int cnt = 0;
         pthread_mutex_lock(&mutex);
         newsockfd = -1;
         pthread_mutex_unlock(&mutex);
+
         pthread_mutex_lock(&sendMutex);
         destroy_table(send_table);
         init_table(&send_table);
         pthread_mutex_unlock(&sendMutex);
+
         pthread_mutex_lock(&recvMutex);
         destroy_table(recv_table);
         init_table(&recv_table);
