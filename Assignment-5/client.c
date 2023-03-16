@@ -37,7 +37,7 @@ int main(int argc, char *argv[])
         scanf("%d", &op);
         getchar();
         if (op == -1)
-            return -1;
+            break;
         else if (op == 0)
         {
             int len = getline(&buf, &size, stdin);

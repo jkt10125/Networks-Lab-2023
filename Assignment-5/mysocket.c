@@ -35,20 +35,22 @@ void destroy_table(Table *table)
 
 void *SthreadRunner(void *param)
 {
-    pthread_mutex_lock(&mutex);
-    while (newsockfd == -1)
-        pthread_cond_wait(&connected, &mutex);
-    pthread_mutex_unlock(&mutex);
-    int cnt = 0;
+
     while (1)
     {
+        pthread_mutex_lock(&mutex);
+        while (newsockfd == -1)
+            pthread_cond_wait(&connected, &mutex);
+        pthread_mutex_unlock(&mutex);
         pthread_testcancel();
         pthread_mutex_lock(&sendMutex);
         while (send_table->size == 0)
         {
             pthread_cond_wait(&sendFull, &sendMutex);
         }
+        pthread_mutex_unlock(&sendMutex);
         pthread_testcancel();
+        pthread_mutex_lock(&sendMutex);
         int flags = send_table->buffer[send_table->start].flags;
         int msglen = send_table->buffer[send_table->start].msglen;
         char *msg = (char *)malloc(msglen);
@@ -60,8 +62,7 @@ void *SthreadRunner(void *param)
         pthread_mutex_unlock(&sendMutex);
         if (send(newsockfd, &msglen, sizeof(msglen), flags) < 0)
         {
-            pthread_exit(NULL);
-            return NULL;
+            continue;
         }
         int sendlen;
         char buffer[BUFSIZE];
@@ -76,8 +77,7 @@ void *SthreadRunner(void *param)
             }
             if (send(newsockfd, buffer, buflen, flags) < 0)
             {
-                pthread_exit(NULL);
-                return NULL;
+                continue;
             }
         }
         // free(msg);
@@ -87,13 +87,16 @@ void *SthreadRunner(void *param)
 
 void *RthreadRunner(void *param)
 {
-    pthread_mutex_lock(&mutex);
-    while (newsockfd == -1)
-        pthread_cond_wait(&connected, &mutex);
-    pthread_mutex_unlock(&mutex);
+
     while (1)
     {
+        pthread_mutex_lock(&mutex);
+        while (newsockfd == -1)
+            pthread_cond_wait(&connected, &mutex);
+        pthread_mutex_unlock(&mutex);
+
         pthread_testcancel();
+
         int peeklen;
         int size;
         do
@@ -108,8 +111,7 @@ void *RthreadRunner(void *param)
             int n = recv(newsockfd, buf + recvlen, size - recvlen, 0);
             if (n <= 0)
             {
-                pthread_exit(NULL);
-                return NULL;
+                continue;
             }
             recvlen += n;
         }
@@ -118,7 +120,9 @@ void *RthreadRunner(void *param)
         {
             pthread_cond_wait(&recvEmpty, &recvMutex);
         }
+        pthread_mutex_unlock(&recvMutex);
         pthread_testcancel();
+        pthread_mutex_lock(&recvMutex);
         recv_table->buffer[recv_table->end].msg = buf;
         recv_table->buffer[recv_table->end].msglen = size;
         recv_table->buffer[recv_table->end].flags = 0;
@@ -250,7 +254,7 @@ ssize_t my_recv(int fd, void *buf, size_t n, int flags)
     int len = (n > recv_table->buffer[recv_table->start].msglen) ? recv_table->buffer[recv_table->start].msglen : n;
     memcpy(buf, recv_table->buffer[recv_table->start].msg, len);
     // free(recv_table->buffer[recv_table->start].msg);
-    recv_table->start = (recv_table->start+1) % TABLE_SIZE;
+    recv_table->start = (recv_table->start + 1) % TABLE_SIZE;
     recv_table->size--;
     pthread_cond_signal(&recvEmpty);
     pthread_mutex_unlock(&recvMutex);
@@ -264,18 +268,27 @@ int my_close(int fd)
         sockfd = -1;
         pthread_cancel(threadS);
         pthread_cancel(threadR);
-        pthread_cond_signal(&sendEmpty);
-        pthread_cond_signal(&recvFull);
+        pthread_cond_signal(&sendFull);
+        pthread_cond_signal(&recvEmpty);
         pthread_join(threadS, NULL);
         pthread_join(threadR, NULL);
+        destroy_table(send_table);
+        destroy_table(recv_table);
     }
-    destroy_table(send_table);
-    destroy_table(recv_table);
-    if (fd == newsockfd)
+    else if (fd == newsockfd)
     {
+        int cnt = 0;
+        pthread_mutex_lock(&mutex);
         newsockfd = -1;
+        pthread_mutex_unlock(&mutex);
+        pthread_mutex_lock(&sendMutex);
+        destroy_table(send_table);
         init_table(&send_table);
+        pthread_mutex_unlock(&sendMutex);
+        pthread_mutex_lock(&recvMutex);
+        destroy_table(recv_table);
         init_table(&recv_table);
+        pthread_mutex_unlock(&recvMutex);
     }
     return close(fd);
 }

@@ -62,17 +62,22 @@ int main(int argc, char *argv[])
         exit(1);
     }
     printf("server listening.....\n");
-
-    clilen = sizeof(cliaddr);
-    if ((newsockfd = my_accept(sockfd, (struct sockaddr *)&cliaddr, &clilen)) < 0)
+    while (1)
     {
-        perror("accept()");
-        exit(1);
-    }
-    while (communicateWithClient(newsockfd) == 0)
-        ;
+        clilen = sizeof(cliaddr);
+        if ((newsockfd = my_accept(sockfd, (struct sockaddr *)&cliaddr, &clilen)) < 0)
+        {
+            perror("accept()");
+            exit(1);
+        }
+        while (1)
+        {
+            if (communicateWithClient(newsockfd) < 0)
+                break;
+        }
 
-    my_close(newsockfd);
+        my_close(newsockfd);
+    }
 
     my_close(sockfd);
     return 0;
