@@ -1,0 +1,165 @@
+Computer Networks Laboratory (Spring 2023)
+Assignment-5: Message Oriented TCP
+Date: March 17, 2023
+Authors:
+    Abhay Kumar Keshari (20CS10001)
+    Jay Kumar Thakur (20CS30024)
+
+
+---------------------------------------------------------------------------------------------------------------------
+Section 1: DATA STRUCTURES
+---------------------------------------------------------------------------------------------------------------------
+
+struct Entry:
+    -msg      -> address (pointer) of message
+    -msglen   -> length of message in bytes
+    -flags    -> flags (used only for sending message)
+
+struct Table:
+    -buffer   -> list of table entries
+    -start    -> position to read
+    -end      -> position to write
+    -size     -> current size of table
+
+sockfd          -> file descriptor of socket returned by my_socket call (initialized to -1)
+newsockfd       -> file descriptor of socket through which communication happens (initialized to -1)
+send_table      -> Table of messages to be sent
+recv_table      -> Table of recieved messages
+threadS         -> ID of S-thread
+threadR         -> ID of R-thread
+sendMutex       -> Mutex lock for send_table
+sendEmpty       -> Conditional variable indicating whether send_table is empty
+sendFull        -> Conditional variable indicating whether send_table is not empty
+recvMutex       -> Mutex lock for recv_table
+recvEmpty       -> Conditional variable indicating whether recv_table is empty
+recvFull        -> Conditional variable indicating whether recv_table is not empty
+mutex           -> Mutex lock for newsockfd
+connected       -> Conditional variable indicating whether connection is established
+
+
+
+
+---------------------------------------------------------------------------------------------------------------------
+Section 2: FUNCTIONS
+---------------------------------------------------------------------------------------------------------------------
+
+fuction:     void init_table(Table **table)
+description: allocates appropriate space to the table and initializes its fields.
+
+fuction:     void destroy_table(Table *table)
+description: deallocates the table and its fields.
+
+fuction:     void *SthreadRunner(void *param)
+description: runner function for S-thread, does the following continuously
+             waits for connection to be established
+             waits for atleast one entry in send table
+             removes an entry from the send table and sends the message to the connected socket.
+
+fuction:     void *RthreadRunner(void *param)
+description: runner function for R-thread, does the following continuously
+             waits for connection to be established
+             blocks at recv call for receiving a new message
+             enters the recieved message to the recv table.
+
+fuction:     int my_socket(int domain, int type, int protocol)
+description: creates a socket only of type SOCK_MyTCP (connection-based, reliable, in-order, and message oriented protocol).
+             sets the sockfd
+             creates send and recv threads and initializes tables, mutex locks, and conditional variables.
+
+fuction:     int my_bind(int fd, const struct sockaddr *addr, socklen_t len)
+description: wrapper around bind call
+
+fuction:     int my_listen(int fd, int n)
+description: wrapper around listen call
+
+fuction:     int my_accept(int fd, struct sockaddr *addr, socklen_t *addr_len)
+description: wrapper around accept call
+             sets the newsockfd and wakes up send and recv threads
+
+fuction:     int my_connect(int fd, const struct sockaddr *restrict addr, socklen_t len)
+description: wrapper around connect call
+             sets the newsockfd and wakes up send and recv threads
+
+fuction:     ssize_t my_send(int fd, const void *buf, size_t n, int flags)
+description: waits for atleast one empty entry in send table
+             creates a new entry for the send request (copies buffer)
+             adds the entry to table and returns the number of bytes send (assuming send is successful).
+
+fuction:     ssize_t my_recv(int fd, void *buf, size_t n, int flags)
+description: waits for atleast one recieved message in recv table
+             removes it and copies it into the buffer and returns the number of bytes recieved (drops extra-bytes if buffer is insufficient)
+
+fuction:     int my_close(int fd)
+description: if fd = sockfd
+                sends a cancellation request to threads and waits for their cancellation.
+                destroys the send and recv table
+                sets sockfd to -1
+                closes the file descriptor and returns
+             if fd = newsockfd
+                re-initializes send and recv table (for further connection requests to iterative-server)
+                sets newsockfd to -1
+                closes the file descriptor and returns
+
+
+
+
+---------------------------------------------------------------------------------------------------------------------
+Section 3.1: FLOW CONTROL: MY_SEND 
+---------------------------------------------------------------------------------------------------------------------
+
+my_send(fd, buf, n, flags):
+    -> user-thread acquires the lock of send_table
+    -> while send_table is full, it waits conditionally (releases the lock atomically before it goes to wait queue)
+    -> after getting a signal from send-thread (indicating send_table has empty space), it acquires the lock again and wakes up.
+    -> allocates n-bytes for message to send and copies buf into the allocated space.
+    -> sets length of message and flags
+    -> adds a new entry to the send_table
+    -> signals send-thread about the new entry in the table (send-thread might be waiting for a new entry)
+    -> releases the lock of send_table
+
+send-thread: does following continuously
+    -> if connection is not established already, conditionally waits for connection to be established, wakes up after getting a signal from my_accept/my_connect/my_close
+    -> checks for any cancellation requests
+    -> acquires the lock of send_table
+    -> if send_table is empty, conditionally waits for atleast one entry in send_table, wakes up after getting a signal from my_send/my_close
+    -> checks for any cancellation requests
+    -> removes an entry from the send_table, allocates local buffer for message and frees up the space allocated to message
+    -> signals user-thread about space available in send_table ( my_send might be waiting for an empty space in send_table)
+    -> releases the lock of send_table
+    -> sends 4-bytes msglen to the connected socket
+    -> sends msglen-bytes(in chunks of 100) following the length
+    -> if any of send call fails, it stops sending the message right from the failure point
+
+
+
+
+---------------------------------------------------------------------------------------------------------------------
+Section 3.2: FLOW CONTROL: MY_RECV
+---------------------------------------------------------------------------------------------------------------------
+
+my_recv(fd, byuf, n, flags):
+    -> user-thread acquires the lock of recv_table
+    -> while recv_table is empty, it waits conditionally (releases the lock atomically before it goes to wait queue)
+    -> after getting a signal from recv-thread (indicating recv table has atleast one entry), it acquires the lock again and wakes up.
+    -> removes an entry from the recv table
+    -> deallocates the message after copying it into buf (drops extra-bytes if n-bytes are insufficient)
+    -> signals recv-thread about removal of entry from the table (recv-thread might be waiting for a empty space in recv table to add a new recieved message)
+    -> releases the lock of recv table
+
+recv-thread: does following continuously
+    -> if connection is not established already, conditionally waits for connection to be established,  wakes up after getting a signal from my_accept/my_connect/my_close
+    -> checks for any cancellation requests
+    -> continuously peek till recv buffer has less than 4 bytes
+    -> recieves 4-byte msglen from the connected socket (it is now guaranteed to recv 4 bytes)
+    -> recieves exactly msglen-bytes (in while loop) following the length
+    -> if any of recv call fails, it discards the message recieved before failure
+    -> acquires the lock of recv_table
+    -> if recv_table is full, conditionally waits for atleast one empty space in recv table, wakes up after getting signal from my_recv/my_close
+    -> checks for any cancellation requests
+    -> add a new entry to the recv table with the message recieved
+    -> signals user-thread about new message available in recv table ( my_recv might be waiting for a new message in recv table)
+    -> releases the lock of recv_table
+
+
+
+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx

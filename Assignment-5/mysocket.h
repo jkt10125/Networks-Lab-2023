@@ -27,9 +27,9 @@ typedef struct _table
 } Table;
 
 /**
- * @brief   Create a new socket of type TYPE in domain DOMAIN, using
+ * @brief   Create a new socket of type TYPE SOCK_MyTCP in domain DOMAIN, using
  *          protocol PROTOCOL.  If PROTOCOL is zero, one is chosen automatically.
- * Returns a file descriptor for the new socket, or -1 for errors.
+ *          Returns a file descriptor for the new socket, or -1 for errors.
  */
 int my_socket(int domain, int type, int protocol);
 
@@ -63,13 +63,13 @@ int my_accept(int fd, struct sockaddr *addr, socklen_t *addr_len);
 int my_connect(int fd, const struct sockaddr *addr, socklen_t len);
 
 /**
- * @brief   Send N bytes of BUF to socket FD.
+ * @brief   Send N bytes as a message of BUF to socket FD.
  *          Returns the number sent or -1.
  */
 ssize_t my_send(int fd, const void *buf, size_t n, int flags);
 
 /**
- * @brief   Read N bytes into BUF from socket FD.
+ * @brief   Read a message into BUF from socket FD.
  *          Returns the number read or -1 for errors.
  */
 ssize_t my_recv(int fd, void *buf, size_t n, int flags);
