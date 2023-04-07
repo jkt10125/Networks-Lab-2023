@@ -1,0 +1,31 @@
+0: Echo Reply
+This message is a reply to an Echo Request message (Type 8) and indicates that the destination
+host is alive and reachable.
+
+3: Destination Unreachable
+This message is sent by a router or host to inform the sender that the destination host or
+network is unreachable. It includes a code field that provides more information about the
+reason for the unreachable status, such as "Destination Network Unreachable" or "Destination Host Unreachable".
+
+5: Redirect
+This message is sent by a router to inform the sender that it should send its traffic
+to a different next-hop router. This can occur when a router discovers a better path
+to the destination than the one used by the sender.
+
+8: Echo Request
+This message is sent by a host to test the reachability of a destination host. The receiving
+host should send an Echo Reply message (Type 0) back to the sender if it is alive and reachable.
+
+11: Time Exceeded
+This message is sent by a router or host to inform the sender that a packet has been discarded
+because it exceeded its time-to-live (TTL) value. This can occur when a packet is forwarded
+from router to router and its TTL value is decremented at each hop.
+
+13: Timestamp
+This message is used to measure the round-trip time between a sender and a destination. It 
+includes a timestamp that is sent by the sender and echoed back by the destination in a 
+Timestamp Reply message (Type 14).
+
+14: Timestamp Reply
+This message is sent by a destination in response to a Timestamp message (Type 13). It includes
+the original timestamp sent by the sender and a timestamp of the reply message.
