@@ -1,3 +1,40 @@
+n: the number of times a probe will be sent per link
+T: the time difference between any two probes
+
+If the site is given as a name, it first calls gethostbyname() to get an IP address corresponding
+to it. It then creates a raw socket to send and receive ICMP packets.
+
+To discover the intermediate nodes, use the same concept as in traceroute.
+You will not find the entire path together; rather, you will find each link in the path,
+estimate the latency and bandwidth of the link, print it, and then go to the next link
+
+To estimate the latency and bandwidth of an intermediate link X-Y, send ping ICMP packets with
+different amounts of data in them to Y. For each size of data, send n pings, each T seconds apart.
+Use the RTT measurements and the data sizes to estimate the latency and bandwidth.
+
+Note:
+    1.  Any packet may be dropped
+    2.  Both requests may reach their respective destinations out of order
+    3.  More than one request may be on its way before response to any one of them comes back
+    4.  Some intermediate servers will not respond to pings (you cannot get its IP or any other
+        link information). It should still be handled nicely such that your program does not
+        hang/crash, and prints out nice messages
+
+Testing tips:
+    1.  Use microsecond level timings for RTT etc., as most times will be less than 1 millisecond.
+    2.  You can call a small delay() function just after you receive an ICMP packet in your raw socket to artificially delay a packet.
+    3.  You can delay for a random interval irrespective of anything, or scale the delay up, or scale it as per the size etc.
+
+For every ICMP packet sent and received (this can be packets not relevant for you also),
+you should print out the header fields in a nice format. Additionally, for any ICMP packet received
+that is not a Echo Request/reply or Time Exceeded, you should also check the data part to see
+if there is any data, and so, print out the IP header and the next level protocol header fields
+(like TCP/UDP etc., whatever the IP packet dropped was carrying). Since you do not know anything other than
+TCP and UDP, if the protocol field has anything else, print a message saying unknown protocol.
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------
+----------------------------------------------------------------------------------------------------------------------------------------------------------------
+
 0: Echo Reply
 This message is a reply to an Echo Request message (Type 8) and indicates that the destination
 host is alive and reachable.
